@@ -1,0 +1,2 @@
+# phishing-simulation
+AWS上でホスティングする標的型攻撃メール訓練用Webサイト
