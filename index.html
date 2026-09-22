@@ -7,5 +7,15 @@
 <body>
   <h1>セキュリティ訓練ページ</h1>
   <p>このページは標的型訓練用です。</p>
+
+  <p id="token-display"></p>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+
+    document.getElementById('token-display').textContent =
+      token ? `token = ${token}` : 'token が指定されていません';
+  </script>
 </body>
 </html>
