@@ -4,7 +4,7 @@
 
 <h3>AWS で作る、標的型攻撃メールの訓練用ページ</h3>
 
-<p>📦 <strong>Amazon S3</strong> ・ 🌐 <strong>Amazon CloudFront</strong> ・ 🗃️ <strong>Amazon DynamoDB</strong> ・ 📄 <strong>HTML</strong></p>
+<p>📦 <strong>Amazon S3</strong> ・ 🌐 <strong>Amazon CloudFront</strong> ・ 🗃️ <strong>Amazon DynamoDB</strong> ・ ⚙️ <strong>AWS Lambda</strong> ・ 🔑 <strong>AWS IAM</strong> ・ 📄 <strong>HTML</strong></p>
 
 <p>AWS に詳しくない方でも作業できるように、<br>
 押すボタンや入力内容を順番に説明します。</p>
@@ -35,31 +35,50 @@ flowchart LR
     B["🌐 CloudFront<br/>Web サイトの入り口"]
     C["🔒 S3<br/>非公開のファイル置き場"]
     D["📄 index.html"]
+    E["🧪 Lambda コンソール<br/>テスト"]
+    F["⚙️ Lambda<br/>アクセス記録処理"]
+    G["🗃️ DynamoDB<br/>training-users"]
+    H["🗃️ DynamoDB<br/>training-accesses"]
 
     A -->|HTTPS でアクセス| B
     B -->|ファイルを読み込む| C
     C --> D
+    E -->|token を渡す| F
+    F -->|GetItem| G
+    F -->|PutItem| H
 
     classDef person fill:#e8f4ff,stroke:#1f6feb,color:#0d1117,stroke-width:2px;
     classDef cloud fill:#fff3cd,stroke:#f59e0b,color:#0d1117,stroke-width:2px;
     classDef storage fill:#e6ffed,stroke:#2da44e,color:#0d1117,stroke-width:2px;
     classDef file fill:#f3e8ff,stroke:#8250df,color:#0d1117,stroke-width:2px;
+    classDef compute fill:#ffe8cc,stroke:#d97706,color:#0d1117,stroke-width:2px;
+    classDef database fill:#e8f0ff,stroke:#2563eb,color:#0d1117,stroke-width:2px;
 
     class A person;
     class B cloud;
     class C storage;
     class D file;
+    class E,F compute;
+    class G,H database;
 ```
 
 - `S3` に Web ページのファイルを保存します。
 - `CloudFront` を Web サイトの入り口にします。
 - S3 は直接公開しません。CloudFront を通してページを表示します。
+- `Lambda` は `training-users` のトークンを確認し、`training-accesses` にアクセス日時を書き込みます。
+- この手順では Lambda コンソールから動作確認します。Web ページから Lambda を自動実行する接続は、まだ作成しません。
 
 ### 📍 作業の流れ
 
 | 1️⃣ 保存場所を作る | 2️⃣ HTML を入れる | 3️⃣ Web 公開の入り口を作る | 4️⃣ トップページを決める | 5️⃣ 表示を確認する |
 | :---: | :---: | :---: | :---: | :---: |
 | 📦 S3 | 📄 `index.html` | 🌐 CloudFront | 🏠 Default root object | 🎉 完成 |
+
+### 📍 追加設定の流れ
+
+| 6️⃣ 利用者テーブル | 7️⃣ 履歴テーブル | 8️⃣ token 表示 | 9️⃣ 権限付与 | 🔟 Lambda コード | 1️⃣1️⃣ 動作確認 |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| `training-users` | `training-accesses` | URL の値を確認 | IAM ポリシー | 読み取り・書き込み | DynamoDB を確認 |
 
 ---
 
@@ -80,6 +99,11 @@ flowchart LR
 | パーティションキー | DynamoDB で項目を識別し、保存場所を決めるキー |
 | ソートキー | 同じパーティションキーを持つ項目を並べ分けるキー |
 | キャッシュ削除 | CloudFront に残っている古いファイルを無効にする操作 |
+| Lambda | サーバーを用意せずにコードを実行するサービス |
+| IAM | AWS のサービスや利用者に、必要な操作だけを許可する仕組み |
+| 実行ロール | Lambda がほかの AWS サービスを操作するときに使う権限 |
+| ARN | AWS のリソースを一意に識別する文字列 |
+| インラインポリシー | 1つのロールなどに直接追加する権限設定 |
 
 ---
 
@@ -88,7 +112,7 @@ flowchart LR
 次の3点を確認してください。
 
 - AWS マネジメントコンソールにサインインできる
-- S3、CloudFront、DynamoDB を作成できる権限がある
+- S3、CloudFront、DynamoDB、Lambda、IAM を設定できる権限がある
 - 訓練の対象者、実施日、問い合わせ先が決まっている
 
 > [!NOTE]
@@ -307,16 +331,16 @@ https://<コピーしたドメイン名>/
 
 <a id="dynamodb"></a>
 
-## 🗃️ DynamoDB とクエリパラメーターの追加設定
+## 🗃️ DynamoDB、Lambda、クエリパラメーターの追加設定
 
 ここからは、訓練用のトークンに対応する氏名と、アクセス日時を保存するためのテーブルを作ります。その後、URL の `token` を `index.html` に表示できることを確認します。
 
 > [!IMPORTANT]
-> 🔌 この手順の `index.html` は、URL の `token` を画面に表示するだけです。DynamoDB から氏名を取得したり、アクセス日時を書き込んだりはしません。実際に連携するには、別途 API や Lambda などのバックエンドが必要です。
+> 🔌 手順8までの `index.html` は、URL の `token` を画面に表示するだけです。手順9以降で Lambda から DynamoDB を読み書きできるようにしますが、Web ページから Lambda を自動実行する接続は作成しません。実際に連携するには、別途 API などが必要です。
 
 ### 6️⃣ トークンと氏名のテーブルを作る
 
-> **追加設定の進み具合:** 🟩 ⬜ ⬜
+> **追加設定の進み具合:** 🟩 ⬜ ⬜ ⬜ ⬜ ⬜
 
 #### 1. DynamoDB の画面を開く
 
@@ -385,7 +409,7 @@ https://<コピーしたドメイン名>/
 
 ### 7️⃣ トークンとアクセス日時のテーブルを作る
 
-> **追加設定の進み具合:** 🟩 🟩 ⬜
+> **追加設定の進み具合:** 🟩 🟩 ⬜ ⬜ ⬜ ⬜
 
 #### 1. 2つ目のテーブルのキーを設定する
 
@@ -417,7 +441,7 @@ https://<コピーしたドメイン名>/
 
 ### 8️⃣ `token` の表示を確認する
 
-> **追加設定の進み具合:** 🟩 🟩 🟩
+> **追加設定の進み具合:** 🟩 🟩 🟩 ⬜ ⬜ ⬜
 
 手順2で S3 にアップロードした [`index.html`](./index.html) には、URL の `token` を受け取る次の処理が入っています。
 
@@ -448,6 +472,259 @@ https://<ディストリビューションドメイン名>/?token=test-001
 画面に `token = test-001` と表示されたら成功です。🎉
 
 ![クエリパラメーターの token が表示された画面](docs/images/cloudfront-token-result.png)
+
+---
+
+### 9️⃣ Lambda の実行ロールに DynamoDB 権限を付ける
+
+> **追加設定の進み具合:** 🟩 🟩 🟩 🟩 ⬜ ⬜
+
+#### 1. Lambda 関数を確認する
+
+この手順では、`training-access-recorder` という Lambda 関数を使います。まだない場合は、先に次の設定で作成します。
+
+| 画面の項目 | 入力・選択するもの |
+| --- | --- |
+| 作成方法 | 一から作成 |
+| 関数名 | `training-access-recorder` |
+| AWS リージョン | DynamoDB テーブルと同じリージョン。例: 東京 `ap-northeast-1` |
+| ランタイム | Node.js 24.x |
+| アクセス許可 | 基本的な Lambda アクセス権限を持つ新しいロールを作成 |
+| その他の設定 | 初期設定のまま |
+
+設定後に「関数を作成」をクリックします。`Getting started` が表示された場合は、`Dismiss` をクリックして閉じます。
+
+#### 2. 2つのテーブルの ARN をコピーする
+
+1. DynamoDB の「テーブル」を開きます。
+2. `training-users` をクリックします。
+3. 「設定」タブの「一般的な情報」にある「Amazon リソースネーム（ARN）」をコピーします。
+4. `training-accesses` も同じ手順で ARN をコピーします。
+5. どちらの ARN か分かるように、一時的に安全な場所へ控えます。
+
+![DynamoDB テーブルの ARN をコピーする場所](docs/images/dynamodb-copy-table-arn.png)
+
+> [!CAUTION]
+> 🔐 ARN には AWS アカウント ID が含まれます。README、チャット、公開リポジトリなどへ実際の値を貼り付けないでください。
+
+#### 3. Lambda の実行ロールを開く
+
+1. Lambda の `training-access-recorder` を開きます。
+2. 「設定」タブをクリックします。
+3. 左メニューの「アクセス権限」をクリックします。
+4. 「実行ロール」に表示されたロール名のリンクをクリックします。
+5. IAM のロール画面で「許可」タブを開きます。
+6. 「許可を追加」→「インラインポリシーを作成」をクリックします。
+
+![IAM ロールでインラインポリシーを作成する画面](docs/images/iam-create-inline-policy.png)
+
+#### 4. 読み取り・書き込み権限を JSON で設定する
+
+1. ポリシーエディタの「JSON」をクリックします。
+2. 既存の内容を、次の JSON に置き換えます。
+3. `<training-users の ARN>` と `<training-accesses の ARN>` を、先ほどコピーした実際の ARN に置き換えます。
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem"
+      ],
+      "Resource": "<training-users の ARN>"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem"
+      ],
+      "Resource": "<training-accesses の ARN>"
+    }
+  ]
+}
+```
+
+| 許可する操作 | 対象 | 用途 |
+| --- | --- | --- |
+| `dynamodb:GetItem` | `training-users` | `token` が登録済みか確認する |
+| `dynamodb:PutItem` | `training-accesses` | `token` とアクセス日時を記録する |
+
+![IAM の JSON ポリシーエディタ](docs/images/iam-dynamodb-policy-json.png)
+
+> [!IMPORTANT]
+> 🔒 `Resource` を `*` にせず、2つのテーブルの ARN を個別に指定してください。Lambda に必要な操作だけを許可します。
+
+4. JSON のエラーが `0` であることを確認します。
+5. 「次へ」をクリックします。
+
+#### 5. ポリシーを作成する
+
+1. ポリシー名に `TrainingAccessRecorderDynamoDBPolicy` と入力します。
+2. 内容に `DynamoDB`、読み取り、書き込み、複数リソースが表示されていることを確認します。
+3. 「ポリシーの作成」をクリックします。
+
+![インラインポリシーの名前と作成ボタン](docs/images/iam-policy-name.png)
+
+---
+
+### 🔟 Lambda にアクセス記録処理を設定する
+
+> **追加設定の進み具合:** 🟩 🟩 🟩 🟩 🟩 ⬜
+
+#### 1. `index.mjs` を書き換える
+
+1. Lambda の `training-access-recorder` に戻ります。
+2. 「コード」タブをクリックします。
+3. コードソースの `index.mjs` を開きます。
+4. 既存のコードを、次のコードに置き換えます。
+
+```javascript
+import {
+  DynamoDBClient,
+  GetItemCommand,
+  PutItemCommand
+} from "@aws-sdk/client-dynamodb";
+
+const client = new DynamoDBClient({});
+
+const USERS_TABLE = "training-users";
+const ACCESSES_TABLE = "training-accesses";
+
+export const handler = async (event) => {
+  try {
+    const body = event.body ? JSON.parse(event.body) : {};
+    const token = body.token;
+
+    if (!token) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({
+          message: "token is required"
+        })
+      };
+    }
+
+    // token が training-users に存在するか確認
+    const userResult = await client.send(
+      new GetItemCommand({
+        TableName: USERS_TABLE,
+        Key: {
+          token: { S: token }
+        }
+      })
+    );
+
+    if (!userResult.Item) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({
+          message: "token not found"
+        })
+      };
+    }
+
+    // 現在時刻を取得
+    const accessedAt = new Date().toISOString();
+
+    // アクセス履歴を書き込み
+    await client.send(
+      new PutItemCommand({
+        TableName: ACCESSES_TABLE,
+        Item: {
+          token: { S: token },
+          accessedAt: { S: accessedAt }
+        }
+      })
+    );
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        message: "access recorded",
+        token,
+        accessedAt
+      })
+    };
+  } catch (error) {
+    console.error(error);
+
+    return {
+      statusCode: 500,
+      body: JSON.stringify({
+        message: "internal server error"
+      })
+    };
+  }
+};
+```
+
+#### 2. コードを反映する
+
+1. コードの右側に `Undeployed Changes` と表示されていることを確認します。
+2. 「Deploy」をクリックします。
+3. 「関数 `training-access-recorder` が正常に更新されました。」と表示されたら完了です。
+
+![Lambda のコードと Deploy ボタン](docs/images/lambda-code-deploy.png)
+
+> [!NOTE]
+> 💡 このコードは、登録済みの `token` だけを受け付けます。`training-users` にない値では履歴を作成しません。
+
+---
+
+### 1️⃣1️⃣ Lambda と DynamoDB の動作を確認する
+
+> **追加設定の進み具合:** 🟩 🟩 🟩 🟩 🟩 🟩
+
+#### 1. Lambda のテストイベントを実行する
+
+1. Lambda の「テスト」タブをクリックします。
+2. 「新しいイベントを作成」を選びます。
+3. 呼び出しタイプは「同期」、イベント共有の設定は「プライベート」のままにします。
+4. イベント名は任意の名前を入力します。例: `MyEventName`
+5. 「イベント JSON」に次の内容を入力します。
+
+```json
+{
+  "body": "{\"token\":\"test-001\"}"
+}
+```
+
+6. 「テスト」をクリックします。
+
+![Lambda のテストイベントとテストボタン](docs/images/lambda-test-event.png)
+
+#### 2. Lambda の応答を確認する
+
+1. 画面上部の「詳細」を開きます。
+2. 「実行中の関数: 成功」と表示されていることを確認します。
+3. `Response` の `statusCode` が `200` になっていることを確認します。
+4. `body` に `access recorded`、`test-001`、実行日時が表示されていることを確認します。
+
+応答の例は次のとおりです。
+
+```json
+{
+  "statusCode": 200,
+  "body": "{\"message\":\"access recorded\",\"token\":\"test-001\",\"accessedAt\":\"20XX-XX-XXTXX:XX:XX.XXXZ\"}"
+}
+```
+
+![Lambda のテストが成功した画面](docs/images/lambda-test-success.png)
+
+#### 3. DynamoDB のレコードを確認する
+
+1. DynamoDB の左メニューから「項目を探索」をクリックします。
+2. `training-accesses` を選びます。
+3. 「スキャン」を選び、「実行する」をクリックします。
+4. `token` に `test-001` が表示されることを確認します。
+5. `accessedAt` に Lambda を実行した日時が UTC の ISO 8601 形式で表示されることを確認します。
+
+![training-accesses に記録された token とアクセス日時](docs/images/dynamodb-access-record.png)
+
+> [!NOTE]
+> 🕒 テストを複数回実行すると、同じ `token` でも `accessedAt` が異なる項目として記録されます。
 
 ---
 
@@ -507,6 +784,13 @@ https://<ディストリビューションドメイン名>/?token=test-001
 - [ ] DynamoDB に `training-accesses` テーブルがあり、状態が「アクティブ」
 - [ ] `training-accesses` のキーが `token`（文字列）と `accessedAt`（文字列）
 - [ ] `?token=test-001` を付けると `token = test-001` と表示される
+- [ ] Lambda に `training-access-recorder` 関数がある
+- [ ] 実行ロールに `TrainingAccessRecorderDynamoDBPolicy` がある
+- [ ] `training-users` には `GetItem`、`training-accesses` には `PutItem` だけを許可している
+- [ ] Lambda のコードを Deploy 済み
+- [ ] `test-001` のテスト結果が `statusCode: 200`
+- [ ] `training-accesses` に `test-001` と `accessedAt` が記録されている
+- [ ] Web ページから Lambda を自動実行する接続は、この手順の対象外だと理解している
 
 ---
 
@@ -523,6 +807,12 @@ https://<ディストリビューションドメイン名>/?token=test-001
 | DynamoDB のテーブルを作成できない | テーブル名とキー名を確認。DynamoDB を作成できる権限があるか管理者に確認 |
 | DynamoDB の状態が「作成中」のまま | 少し待ってから、更新ボタンで画面を再読み込み |
 | `token が指定されていません` と表示される | URL の末尾が `/?token=test-001` になっているか確認 |
+| `AccessDeniedException` | 実行ロールのインラインポリシー、操作名、2つのテーブル ARN を確認 |
+| `ResourceNotFoundException` | Lambda と DynamoDB のリージョン、およびテーブル名を確認 |
+| Lambda の応答が `400` | テスト JSON の `body` 内に `token` が入っているか確認 |
+| Lambda の応答が `404` | `training-users` に `token: test-001` の項目があるか確認 |
+| Lambda の応答が `500` | コードを Deploy 済みか確認し、テスト結果または CloudWatch Logs のエラーを確認 |
+| テストは成功したが履歴が見つからない | `training-accesses` を選び直し、「スキャン」→「実行する」で再読み込み |
 | 公開後に更新した `index.html` が表示されない | 補足手順の S3 上書きアップロードと CloudFront の `/*` のキャッシュ削除を確認 |
 
 ---
@@ -533,5 +823,8 @@ https://<ディストリビューションドメイン名>/?token=test-001
 - パスワード、氏名、メールアドレスを入力させる画面は作らないでください。
 - URL の `token` には、個人情報や認証情報を直接入れないでください。
 - DynamoDB に実データを登録する場合は、保存目的、閲覧権限、保存期間を組織内で決めてください。
+- DynamoDB の ARN や AWS アカウント ID を、公開リポジトリや外部のチャットへ貼らないでください。
+- Lambda の実行ロールには必要なテーブルと操作だけを許可し、`Resource: "*"` は使わないでください。
+- この手順では Lambda の関数 URL を有効にしません。外部公開する場合は、認証、入力検証、レート制限を別途設計してください。
 - S3 のパブリックアクセスは、すべてブロックしてください。
-- 訓練が終わったら、不要になった CloudFront、S3、DynamoDB のテーブルを削除してください。
+- 訓練が終わったら、不要になった CloudFront、S3、DynamoDB のテーブル、Lambda 関数、IAM ポリシーを削除してください。
