@@ -4,7 +4,7 @@
 
 <h3>AWS で作る、標的型攻撃メールの訓練用ページ</h3>
 
-<p>📦 <strong>Amazon S3</strong> ・ 🌐 <strong>Amazon CloudFront</strong> ・ 🗃️ <strong>Amazon DynamoDB</strong> ・ ⚙️ <strong>AWS Lambda</strong> ・ 🔑 <strong>AWS IAM</strong> ・ 📄 <strong>HTML</strong></p>
+<p>📦 <strong>Amazon S3</strong> ・ 🌐 <strong>Amazon CloudFront</strong> ・ ⚡ <strong>CloudFront Functions</strong> ・ 📊 <strong>Amazon CloudWatch Logs</strong> ・ 📄 <strong>HTML / CSV</strong></p>
 
 <p>AWS に詳しくない方でも作業できるように、<br>
 押すボタンや入力内容を順番に説明します。</p>
@@ -19,8 +19,8 @@
 <p align="center">
   <a href="#overview">🗺️ しくみ</a> ・
   <a href="#words">📖 用語集</a> ・
-  <a href="#steps">🚀 作り方</a> ・
-  <a href="#dynamodb">🗃️ 追加設定</a> ・
+  <a href="#steps">🚀 Web ページを公開</a> ・
+  <a href="#logging">📊 アクセスを確認</a> ・
   <a href="#check">✅ 最後の確認</a> ・
   <a href="#help">🆘 困ったとき</a>
 </p>
@@ -35,50 +35,56 @@ flowchart LR
     B["🌐 CloudFront<br/>Web サイトの入り口"]
     C["🔒 S3<br/>非公開のファイル置き場"]
     D["📄 index.html"]
-    E["🧪 Lambda コンソール<br/>テスト"]
-    F["⚙️ Lambda<br/>アクセス記録処理"]
-    G["🗃️ DynamoDB<br/>training-users"]
-    H["🗃️ DynamoDB<br/>training-accesses"]
+    E["⚡ CloudFront Function<br/>training-access-logger"]
+    F["📊 CloudWatch Logs<br/>米国東部 us-east-1"]
+    G["📄 training_users.csv"]
+    H["🔎 ルックアップテーブル<br/>training_users"]
+    I["🔍 Logs Insights<br/>アクセス結果"]
 
-    A -->|HTTPS でアクセス| B
+    A -->|x-token を付けてアクセス| B
+    B -->|ビューワーリクエスト| E
+    E -->|リクエストを戻す| B
     B -->|ファイルを読み込む| C
     C --> D
-    E -->|token を渡す| F
-    F -->|GetItem| G
-    F -->|PutItem| H
+    E -.->|ログをベストエフォートで配信| F
+    G --> H
+    F --> I
+    H --> I
 
     classDef person fill:#e8f4ff,stroke:#1f6feb,color:#0d1117,stroke-width:2px;
     classDef cloud fill:#fff3cd,stroke:#f59e0b,color:#0d1117,stroke-width:2px;
     classDef storage fill:#e6ffed,stroke:#2da44e,color:#0d1117,stroke-width:2px;
     classDef file fill:#f3e8ff,stroke:#8250df,color:#0d1117,stroke-width:2px;
     classDef compute fill:#ffe8cc,stroke:#d97706,color:#0d1117,stroke-width:2px;
-    classDef database fill:#e8f0ff,stroke:#2563eb,color:#0d1117,stroke-width:2px;
+    classDef logs fill:#e8f0ff,stroke:#2563eb,color:#0d1117,stroke-width:2px;
 
     class A person;
     class B cloud;
     class C storage;
-    class D file;
-    class E,F compute;
-    class G,H database;
+    class D,G file;
+    class E compute;
+    class F,H,I logs;
 ```
 
 - `S3` に Web ページのファイルを保存します。
-- `CloudFront` を Web サイトの入り口にします。
-- S3 は直接公開しません。CloudFront を通してページを表示します。
-- `Lambda` は `training-users` のトークンを確認し、`training-accesses` にアクセス日時を書き込みます。
-- この手順では Lambda コンソールから動作確認します。Web ページから Lambda を自動実行する接続は、まだ作成しません。
+- `CloudFront` を Web サイトの入り口にし、S3 は直接公開しません。
+- `CloudFront Function` が URL の `x-token` を読み取り、CloudWatch Logs へログを出力します。
+- `training_users.csv` を CloudWatch のルックアップテーブルに登録します。
+- Logs Insights でログとルックアップテーブルを突合し、アクセス日時、トークン、氏名を表示します。
+- この構成では Lambda、DynamoDB、Web ページから呼び出す API を使用しません。
+
+> [!WARNING]
+> 📊 CloudFront Functions のログは、CloudWatch Logs へ**ベストエフォート**で配信されます。反映まで数分かかる場合や、まれにログが配信されない場合があります。全アクセスの完全な証跡や、監査・課金の根拠には使用しないでください。
 
 ### 📍 作業の流れ
 
-| 1️⃣ 保存場所を作る | 2️⃣ HTML を入れる | 3️⃣ Web 公開の入り口を作る | 4️⃣ トップページを決める | 5️⃣ 表示を確認する |
+| 1️⃣ 保存場所 | 2️⃣ HTML | 3️⃣ Web 公開 | 4️⃣ トップページ | 5️⃣ 表示確認 |
 | :---: | :---: | :---: | :---: | :---: |
-| 📦 S3 | 📄 `index.html` | 🌐 CloudFront | 🏠 Default root object | 🎉 完成 |
+| S3 | `index.html` | CloudFront | Default root object | HTTPS で確認 |
 
-### 📍 追加設定の流れ
-
-| 6️⃣ 利用者テーブル | 7️⃣ 履歴テーブル | 8️⃣ token 表示 | 9️⃣ 権限付与 | 🔟 Lambda コード | 1️⃣1️⃣ 動作確認 |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| `training-users` | `training-accesses` | URL の値を確認 | IAM ポリシー | 読み取り・書き込み | DynamoDB を確認 |
+| 6️⃣ ログ関数 | 7️⃣ 関数の関連付け | 8️⃣ ログ確認 | 9️⃣ 氏名テーブル | 🔟 集計 |
+| :---: | :---: | :---: | :---: | :---: |
+| CloudFront Function | ビューワーリクエスト | CloudWatch Logs | CSV を登録 | Logs Insights |
 
 ---
 
@@ -89,34 +95,35 @@ flowchart LR
 | 言葉 | かんたんな意味 |
 | --- | --- |
 | AWS マネジメントコンソール | ブラウザーから AWS のサービスを設定する管理画面 |
-| リージョン | AWS の設備がある地域。この手順では、利用者が選んだ1つのリージョンを使う |
+| リージョン | AWS の設備がある地域。S3 は利用者が選んだリージョン、CloudFront Function のログは `us-east-1` を使う |
 | S3 | ファイルを保存する場所 |
 | バケット | S3 の中に作る、ファイル入れ |
 | CloudFront | S3 のファイルを Web サイトとして表示するサービス |
 | ディストリビューション | CloudFront で作る Web サイトの設定 |
 | オリジン | CloudFront がファイルを取りに行く場所。この手順では S3 |
-| デプロイ | 設定を AWS に反映すること |
-| DynamoDB | トークンと氏名、トークンとアクセス日時などを保存するデータベース |
-| テーブル | DynamoDB のデータをまとめて保存する場所 |
-| パーティションキー | DynamoDB で項目を識別し、保存場所を決めるキー |
-| ソートキー | 同じパーティションキーを持つ項目を並べ分けるキー |
+| ビヘイビア | URL のパスごとに、キャッシュや関数の実行方法を決める設定 |
+| CloudFront Functions | CloudFront へのリクエストやレスポンスを短い JavaScript で処理する機能 |
+| ビューワーリクエスト | ブラウザーから CloudFront へリクエストが届いたときに発生するイベント |
+| クエリパラメーター | URL の `?` より後ろに付ける値。この手順では `x-token` を使う |
+| CloudWatch Logs | AWS サービスが出力するログを保存・確認するサービス |
+| ロググループ | 同じ用途のログをまとめる入れ物 |
+| ログストリーム | ロググループ内でログレコードを分けて保存する単位 |
+| Logs Insights | CloudWatch Logs のログをクエリで検索・集計する機能 |
+| ルックアップテーブル | ログの値を CSV の情報と突合するためのテーブル |
+| デプロイ / 公開 | 設定やコードを実際に使える状態へ反映すること |
 | キャッシュ削除 | CloudFront に残っている古いファイルを無効にする操作 |
-| Lambda | サーバーを用意せずにコードを実行するサービス |
-| IAM | AWS のサービスや利用者に、必要な操作だけを許可する仕組み |
-| 実行ロール | Lambda がほかの AWS サービスを操作するときに使う権限 |
-| ARN | AWS のリソースを一意に識別する文字列 |
-| インラインポリシー | 1つのロールなどに直接追加する権限設定 |
 
 ---
 
 ## ✅ 作業を始める前に
 
-次の4点を確認してください。
+次の5点を確認してください。
 
 - AWS マネジメントコンソールにサインインできる
-- S3、CloudFront、DynamoDB、Lambda、IAM を設定できる権限がある
+- S3、CloudFront、CloudFront Functions、CloudWatch Logs を設定できる権限がある
 - 訓練の対象者、実施日、問い合わせ先が決まっている
-- S3、DynamoDB、Lambda を作成するリージョンを1つ決めている
+- S3 バケットを作成するリージョンを1つ決めている
+- このプロジェクトの [`index.html`](./index.html) と [`training_users.csv`](./training_users.csv) を使用できる
 
 > [!NOTE]
 > 💡 AWS の画面は変更されることがあります。ボタンの場所が少し違っても、同じ名前の項目を探してください。
@@ -124,25 +131,29 @@ flowchart LR
 > [!TIP]
 > 🧭 別の AWS サービスへ移動するときは、画面上部の検索欄にサービス名を入力し、検索結果をクリックします。左メニューが見えない場合は、画面左上のメニューアイコンをクリックしてください。
 
-### 🌏 利用リージョンを決める
+### 🌏 リージョンの使い分け
 
-この README では、ここで選んだリージョンを「**利用リージョン**」と呼びます。組織のルール、データの保管場所、利用できるサービスなどに合わせて選んでください。
+この手順では、用途によってリージョンの扱いが異なります。
 
-| 記入するもの | 例 |
+| 対象 | 使用するリージョン |
 | --- | --- |
-| 利用リージョン名 | アジアパシフィック（東京） |
-| 利用リージョンコード | `ap-northeast-1` |
+| S3 バケット | 組織のルールに合わせて選んだ利用リージョン |
+| CloudFront / CloudFront Functions | リージョンを選ばないグローバルサービス |
+| CloudFront Function の CloudWatch Logs | 米国東部（バージニア北部）`us-east-1` |
+| ルックアップテーブル / Logs Insights | ログと同じ `us-east-1` |
 
-以降の作業で迷わないように、実際に選んだリージョン名とリージョンコードをメモしておきます。東京以外を選んでも、この手順を利用できます。
+S3 の利用リージョン名とリージョンコードをメモしておきます。たとえば東京なら「アジアパシフィック（東京）」と `ap-northeast-1` です。
 
 > [!IMPORTANT]
-> 🌏 S3、DynamoDB、Lambda は、すべて同じ利用リージョンに作成してください。DynamoDB と Lambda のリージョンが異なると、Lambda からテーブルを見つけられません。各サービスを開くたびに、AWS 画面右上が利用リージョンになっていることを確認します。CloudFront と IAM はリージョンを選ばないグローバルサービスです。
+> 🌏 S3 をどのリージョンに作成しても、CloudFront Function のログ確認以降は CloudWatch を `us-east-1` に切り替えます。利用リージョン側の CloudWatch を探しても、このロググループは表示されません。
 
 ---
 
 <a id="steps"></a>
 
-## 🚀 作り方
+## 🚀 Web ページを公開する
+
+<a id="step-1"></a>
 
 ### 1️⃣ S3 にバケットを作る
 
@@ -156,15 +167,13 @@ flowchart LR
 4. 左メニューの「バケット」→「汎用バケット」の順にクリックします。
 5. 「バケットを作成」をクリックします。
 
-![S3 の「バケットを作成」ボタン](docs/images/s3-create-bucket.png)
+<img src="docs/images/s3-create-bucket.png" alt="S3 の「バケットを作成」ボタン" width="70%" />
 
 #### 2. バケットの設定を入力する
 
-画面の項目を、上から順に設定します。
-
 | 画面の項目 | 選ぶもの・入力するもの | 説明 |
 | --- | --- | --- |
-| AWS リージョン | 事前に決めた利用リージョン | DynamoDB と Lambda にも同じリージョンを使う |
+| AWS リージョン | 事前に決めた利用リージョン | 組織のルールに合わせる |
 | バケットタイプ | 汎用 | この手順で使うタイプ |
 | バケット名前空間 | グローバル名前空間 | 変更しない |
 | バケット名 | `<training-site-random-suffix>` | 自分で決めた名前に置き換える |
@@ -177,15 +186,17 @@ flowchart LR
 | 詳細設定 | 初期設定のまま | 変更しない |
 
 > [!IMPORTANT]
-> 🛠️ バケット名は、AWS 全体でほかの人と同じ名前を使えません。「この名前は使えません」と表示されたら、名前の後ろにランダムな英数字を追加してください。
+> 🛠️ バケット名は AWS 全体で一意である必要があります。「この名前は使えません」と表示されたら、末尾にランダムな英数字を追加してください。
 
 #### 3. バケットを作る
 
-1. 「パブリックアクセスをすべてブロック」が ON になっていることを、もう一度確認します。
+1. 「パブリックアクセスをすべてブロック」が ON であることを再確認します。
 2. 画面下部の「バケットを作成」をクリックします。
-3. バケット一覧に、作ったバケットが表示されたら完了です。
+3. バケット一覧に作ったバケットが表示されたら完了です。
 
 ---
+
+<a id="step-2"></a>
 
 ### 2️⃣ `index.html` を S3 に入れる
 
@@ -193,7 +204,7 @@ flowchart LR
 
 #### 1. `index.html` を用意する
 
-このプロジェクトフォルダーにある [`index.html`](./index.html) を使います。中身は次のとおりです。
+このプロジェクトフォルダーにある [`index.html`](./index.html) を使います。Web ページの内容は次のとおりです。
 
 ```html
 <!DOCTYPE html>
@@ -205,40 +216,30 @@ flowchart LR
 <body>
   <h1>セキュリティ訓練ページ</h1>
   <p>このページは標的型訓練用です。</p>
-
-  <p id="token-display"></p>
-
-  <script>
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('token');
-
-    document.getElementById('token-display').textContent =
-      token ? `token = ${token}` : 'token が指定されていません';
-  </script>
 </body>
 </html>
 ```
+
+`x-token` は HTML に表示しません。<a href="#step-6" target="_blank">手順6「CloudFront Function を作る」</a>で、URL から読み取って CloudWatch Logs へ出力する処理を作ります。
 
 > [!IMPORTANT]
 > 📄 ファイル名は `index.html` です。`Index.html` や `index.htm` に変えないでください。
 
 #### 2. S3 にアップロードする
 
-1. AWS 画面上部の検索欄に `S3` と入力します。
-2. 検索結果の「S3」をクリックします。
-3. 左メニューの「バケット」→「汎用バケット」の順にクリックします。
-4. 手順1で作ったバケット名をクリックします。
-5. 「オブジェクト」タブの「アップロード」をクリックします。
-6. 「ファイルを追加」をクリックします。
-7. パソコンに保存されている `index.html` を選びます。
-8. 画面に `index.html` が表示されたら、右下の「アップロード」をクリックします。
-9. 緑色の成功メッセージが表示されたら完了です。
-10. バケットの中に `index.html` が表示されていることを確認します。
+1. S3 の「バケット」→「汎用バケット」を開きます。
+2. <a href="#step-1" target="_blank">手順1「S3 にバケットを作る」</a>で作ったバケット名をクリックします。
+3. 「オブジェクト」タブの「アップロード」をクリックします。
+4. 「ファイルを追加」をクリックし、`index.html` を選びます。
+5. 右下の「アップロード」をクリックします。
+6. 緑色の成功メッセージと、バケット内の `index.html` を確認します。
 
 > [!NOTE]
-> 💡 この時点で S3 の URL を開けなくても正常です。次の手順で CloudFront を設定します。
+> 💡 この時点で S3 の URL を開けなくても正常です。<a href="#step-3" target="_blank">手順3「CloudFront を作る」</a>で公開設定を行います。
 
 ---
+
+<a id="step-3"></a>
 
 ### 3️⃣ CloudFront を作る
 
@@ -246,23 +247,20 @@ flowchart LR
 
 #### 1. CloudFront の画面を開く
 
-1. AWS 画面上部の検索欄に `CloudFront` と入力します。
-2. 検索結果の「CloudFront」をクリックします。
-3. 定額プランの案内が表示されたら、「定額ディストリビューションを作成」をクリックします。
+1. AWS 画面上部の検索欄に `CloudFront` と入力し、CloudFront を開きます。
+2. 定額プランの案内が表示されたら、「定額ディストリビューションを作成」をクリックします。
 
-![CloudFront の「定額ディストリビューションを作成」ボタン](docs/images/cloudfront-flat-rate-plan.png)
+<img src="docs/images/cloudfront-flat-rate-plan.png" alt="CloudFront の「定額ディストリビューションを作成」ボタン" width="70%" />
 
-4. 「Flat-rate plans」を選びます。
-5. 無料プランの「Choose 無料」をクリックします。
+3. 「Flat-rate plans」を選びます。
+4. 無料プランの「Choose 無料」をクリックします。
 
 > [!WARNING]
-> 💰 画面に料金が表示されたら、作成する前に必ず確認してください。画面が画像と違う場合は、自分の画面に表示される案内に従ってください。
+> 💰 画面に料金が表示されたら、作成前に必ず確認してください。画面が画像と違う場合は、自分の画面に表示される案内に従ってください。
 
 <a id="cloudfront-distribution-name"></a>
 
 #### 2. 基本設定を入力する
-
-「Get started」画面で設定します。
 
 | 画面の項目 | 入力・選択するもの |
 | --- | --- |
@@ -275,8 +273,6 @@ flowchart LR
 
 #### 3. S3 を選ぶ
 
-「Specify origin」画面で設定します。
-
 | 画面の項目 | 入力・選択するもの |
 | --- | --- |
 | Origin type | Amazon S3 |
@@ -286,568 +282,413 @@ flowchart LR
 | Origin settings | Use recommended origin settings |
 | Cache settings | Use recommended cache settings tailored to serving S3 content |
 
-S3 バケットの選び方は次のとおりです。
-
 1. `S3 origin` の「Browse S3」をクリックします。
-2. 先ほど作ったバケットを選びます。
-3. 「Choose」をクリックします。
-4. `S3 origin` に選んだバケットが表示されたことを確認します。
-5. 「Next」をクリックします。
+2. 作成したバケットを選び、「Choose」をクリックします。
+3. `S3 origin` に正しいバケットが表示されたことを確認します。
+4. 「Next」をクリックします。
 
 > [!IMPORTANT]
-> 🔒 `Allow private S3 bucket access to CloudFront` は ON のままにしてください。S3 を直接公開せず、CloudFront からだけファイルを読めるようにするためです。
+> 🔒 `Allow private S3 bucket access to CloudFront` は ON のままにします。S3 を直接公開せず、CloudFront からだけ読み込むためです。
 
 #### 4. セキュリティ画面を確認する
 
-1. 「Enable security」画面が表示されます。
-2. 有料機能の表示がある場合は、料金を確認します。
-3. この手順では設定を変えず、「Next」をクリックします。
+1. 「Enable security」画面で有料機能の表示がある場合は、料金を確認します。
+2. この手順では設定を変えず、「Next」をクリックします。
 
 #### 5. CloudFront を作成する
 
-1. 「Review and create」画面で、これまでの設定が表示されます。
-2. `S3 origin` に正しいバケットが表示されていることを確認します。
-3. 画面右下の「Create distribution」をクリックします。
-4. 緑色の「新しいディストリビューションが正常に作成されました。」が表示されることを確認します。
-5. 「最終変更日」が「デプロイ」になるまで待ちます。
-
-> [!NOTE]
-> ⏳ 設定の反映には時間がかかることがあります。すぐに完了しない場合は、少し待ってから画面を再読み込みしてください。
+1. 「Review and create」で `S3 origin` が正しいことを確認します。
+2. 「Create distribution」をクリックします。
+3. 作成成功の通知を確認します。
+4. ディストリビューションのステータスが「デプロイ済み」になるまで待ちます。
 
 ---
+
+<a id="step-4"></a>
 
 ### 4️⃣ トップページに `index.html` を設定する
 
 > **進み具合:** 🟩 🟩 🟩 🟩 ⬜
 
-1. AWS 画面上部の検索欄に `CloudFront` と入力します。
-2. 検索結果の「CloudFront」をクリックします。
-3. 左メニューの「ディストリビューション」をクリックします。
-4. ディストリビューションの一覧で、[手順3「CloudFront を作る」の「基本設定を入力する」](#cloudfront-distribution-name)で `Distribution name` に入力した名前を探し、クリックします。
-5. 「一般」タブをクリックします。
-6. 「設定」の右上にある「編集」をクリックします。
-7. `Default root object - optional` に `index.html` と入力します。
+1. CloudFront の「ディストリビューション」を開きます。
+2. <a href="#cloudfront-distribution-name" target="_blank">手順3「CloudFront を作る」の「基本設定を入力する」</a>で入力した名前をクリックします。
+3. 「一般」タブの「設定」で「編集」をクリックします。
+4. `Default root object - optional` に `index.html` と入力します。
 
-![Default root object に index.html を入力した画面](docs/images/cloudfront-default-root-object.png)
+<img src="docs/images/cloudfront-default-root-object.png" alt="Default root object に index.html を入力した画面" width="70%" />
 
 > [!IMPORTANT]
-> ✍️ `index.html` の前に `/` は付けません。`/index.html` ではなく、`index.html` と入力してください。
+> ✍️ `/index.html` ではなく、先頭に `/` を付けない `index.html` を入力します。
 
-8. 画面下部の「変更を保存」をクリックします。
-9. 緑色の「ディストリビューション設定が正常に更新されました。」が表示されることを確認します。
-10. 設定の反映が終わるまで待ちます。
+5. 「変更を保存」をクリックします。
+6. 成功メッセージを確認し、設定の反映が終わるまで待ちます。
 
 ---
+
+<a id="step-5"></a>
 
 ### 5️⃣ Web ページを開く
 
 > **進み具合:** 🟩 🟩 🟩 🟩 🟩
 
-1. AWS 画面上部の検索欄に `CloudFront` と入力し、検索結果の「CloudFront」をクリックします。
-2. 左メニューの「ディストリビューション」をクリックします。
-3. [手順3「CloudFront を作る」の「基本設定を入力する」](#cloudfront-distribution-name)で `Distribution name` に入力した名前を探し、クリックします。
-4. 「一般」タブを開きます。
-5. 「ディストリビューションドメイン名」を探します。
-6. 表示されたドメイン名をコピーします。
-7. 新しいブラウザータブを開き、アドレス欄に次のように入力します。`<コピーしたドメイン名>` の部分は、直前にコピーした値に置き換えてください。
+1. 作成した CloudFront ディストリビューションを開きます。
+2. 「一般」タブの「ディストリビューションドメイン名」をコピーします。
+3. 新しいブラウザータブで次の URL を開きます。
 
 ```text
-https://<コピーしたドメイン名>/
+https://<コピーしたディストリビューションドメイン名>/
 ```
 
-8. Enter キーを押してページを開き、「セキュリティ訓練ページ」と表示されたら成功です。🎉
+4. 「セキュリティ訓練ページ」と表示されたら成功です。🎉
 
 ---
 
-<a id="dynamodb"></a>
+<a id="logging"></a>
 
-## 🗃️ DynamoDB、Lambda、クエリパラメーターの追加設定
+## 📊 CloudWatch Logs でアクセスを確認する
 
-ここからは、訓練用のトークンに対応する氏名と、アクセス日時を保存するためのテーブルを作ります。その後、URL の `token` を `index.html` に表示できることを確認します。
+<a id="step-6"></a>
 
-> [!IMPORTANT]
-> 🔌 手順8までの `index.html` は、URL の `token` を画面に表示するだけです。手順9以降で Lambda から DynamoDB を読み書きできるようにしますが、Web ページから Lambda を自動実行する接続は作成しません。実際に連携するには、別途 API などが必要です。
+### 6️⃣ CloudFront Function を作る
 
-### 6️⃣ トークンと氏名のテーブルを作る
+> **ログ設定の進み具合:** 🟩 ⬜ ⬜ ⬜ ⬜
 
-> **追加設定の進み具合:** 🟩 ⬜ ⬜ ⬜ ⬜ ⬜
+#### 1. 関数の作成画面を開く
 
-#### 1. DynamoDB の画面を開く
-
-1. ブラウザーで AWS マネジメントコンソールのタブに戻ります。閉じている場合は、もう一度サインインします。
-2. 画面右上が、事前に決めた利用リージョンになっていることを確認します。違う場合は、リージョン名をクリックして利用リージョンを選びます。
-3. 画面上部の検索欄に `DynamoDB` と入力します。
-4. 検索結果の「DynamoDB」をクリックします。
-5. 左メニューの「テーブル」をクリックします。
-6. 「テーブルの作成」をクリックします。
-
-![DynamoDB の「テーブルの作成」ボタン](docs/images/dynamodb-create-table.png)
-
-#### 2. `training-users` のキーを設定する
-
-「テーブルの詳細」を、次のとおり設定します。
+1. CloudFront のコンソールを開きます。
+2. 左メニューの「関数」をクリックします。
+3. 「関数を作成」をクリックします。
+4. 次のとおり設定します。
 
 | 画面の項目 | 入力・選択するもの |
 | --- | --- |
-| テーブル名 | `training-users` |
-| パーティションキー | `token` |
-| パーティションキーのタイプ | 文字列 |
-| ソートキー | 使わない |
+| 関数名 | `training-access-logger` |
+| Description | 何も入力しない |
+| Runtime | `cloudfront-js-2.0` |
+| Tags | 追加しない |
 
-![training-users のパーティションキー設定](docs/images/dynamodb-training-users-keys.png)
+<img src="docs/images/cloudfront-function-create.png" alt="CloudFront Function の関数名と Runtime" width="70%" />
 
-<a id="dynamodb-capacity-settings"></a>
+5. 「Create」をクリックし、作成成功のメッセージを確認します。
 
-#### 3. キャパシティーを設定する
+#### 2. ログを出力するコードを入力する
 
-「テーブル設定」より下を、次のとおり設定します。
-
-| 画面の項目 | 入力・選択するもの |
-| --- | --- |
-| テーブル設定 | 設定をカスタマイズ |
-| テーブルクラス | DynamoDB 標準 |
-| キャパシティーモード | プロビジョンド |
-| 読み込みキャパシティーの Auto Scaling | オフ |
-| 読み込みのプロビジョンドキャパシティーユニット | `1` |
-| 書き込みキャパシティーの Auto Scaling | オフ |
-| 書き込みのプロビジョンドキャパシティーユニット | `1` |
-
-![DynamoDB のテーブルクラスとキャパシティー設定](docs/images/dynamodb-capacity-settings.png)
-
-> [!WARNING]
-> 💰 DynamoDB は設定や利用量によって料金が発生します。「テーブルの作成」を押す前に、AWS 画面に表示される料金案内を確認してください。
-
-#### 4. テーブルを作る
-
-1. 画面下部の「テーブルの作成」をクリックします。
-2. 「テーブルは正常に作成されました。」と表示されるまで待ちます。
-3. 一覧の状態が「アクティブ」になったら、`training-users` をクリックします。
-4. 「テーブルアイテムの探索」をクリックします。
-
-![作成した training-users と「テーブルアイテムの探索」ボタン](docs/images/dynamodb-training-users-created.png)
-
-#### 5. 確認用の項目を1件作る
-
-1. 「項目を作成」をクリックします。
-2. `token` の値に `test-001` と入力します。
-3. 「新しい属性の追加」→「文字列」を選びます。
-4. 属性名に `name`、値に `テスト太郎` と入力します。
-5. 右下の「項目を作成」をクリックします。
-
-![token と name を入力して項目を作成する画面](docs/images/dynamodb-create-item.png)
-
-> [!NOTE]
-> 🧪 `test-001` と `テスト太郎` は動作確認用の値です。本物の氏名やメールアドレスなどは、許可なく登録しないでください。
-
----
-
-### 7️⃣ トークンとアクセス日時のテーブルを作る
-
-> **追加設定の進み具合:** 🟩 🟩 ⬜ ⬜ ⬜ ⬜
-
-#### 1. 2つ目のテーブルのキーを設定する
-
-1. DynamoDB の左メニューにある「テーブル」をクリックして、テーブル一覧に戻ります。
-2. 「テーブルの作成」をクリックします。
-3. 「テーブルの詳細」を、次のとおり設定します。
-
-| 画面の項目 | 入力・選択するもの |
-| --- | --- |
-| テーブル名 | `training-accesses` |
-| パーティションキー | `token` |
-| パーティションキーのタイプ | 文字列 |
-| ソートキー | `accessedAt` |
-| ソートキーのタイプ | 文字列 |
-
-![training-accesses のパーティションキーとソートキー設定](docs/images/dynamodb-training-accesses-keys.png)
-
-#### 2. キャパシティーを設定して作成する
-
-1. [手順6「キャパシティーを設定する」](#dynamodb-capacity-settings)と同じく、「設定をカスタマイズ」を選びます。
-2. テーブルクラスを「DynamoDB 標準」にします。
-3. キャパシティーモードを「プロビジョンド」にします。
-4. 読み込みと書き込みの Auto Scaling を、どちらもオフにします。
-5. 読み込みと書き込みのプロビジョンドキャパシティーユニットを、どちらも `1` にします。
-6. 「テーブルの作成」をクリックします。
-7. 成功メッセージが表示され、状態が「アクティブ」になったら完了です。
-
----
-
-### 8️⃣ `token` の表示を確認する
-
-> **追加設定の進み具合:** 🟩 🟩 🟩 ⬜ ⬜ ⬜
-
-手順2で S3 にアップロードした [`index.html`](./index.html) には、URL の `token` を受け取る次の処理が入っています。
-
-```html
-<p id="token-display"></p>
-
-<script>
-  const params = new URLSearchParams(window.location.search);
-  const token = params.get('token');
-
-  document.getElementById('token-display').textContent =
-    token ? `token = ${token}` : 'token が指定されていません';
-</script>
-```
-
-- URL に `?token=test-001` がある場合は、`token = test-001` と表示します。
-- `token` がない場合は、「token が指定されていません」と表示します。
-
-> [!IMPORTANT]
-> 🔒 URL に付けるトークンには、氏名、メールアドレス、社員番号などの個人情報を直接入れないでください。訓練専用のランダムな値を使ってください。
-
-1. ブラウザーで AWS マネジメントコンソールのタブに戻ります。
-2. 画面上部の検索欄に `CloudFront` と入力し、検索結果の「CloudFront」をクリックします。
-3. 左メニューの「ディストリビューション」をクリックします。
-4. ディストリビューションの一覧で、[手順3「CloudFront を作る」の「基本設定を入力する」](#cloudfront-distribution-name)で `Distribution name` に入力した名前を探し、クリックします。
-5. 「一般」タブを開きます。
-6. 「ディストリビューションドメイン名」を探し、表示されたドメイン名をコピーします。
-7. 新しいブラウザータブを開き、アドレス欄に次のように入力します。`<コピーしたドメイン名>` の部分は、直前にコピーした値に置き換えてください。
-
-```text
-https://<コピーしたドメイン名>/?token=test-001
-```
-
-8. Enter キーを押してページを開き、画面に `token = test-001` と表示されたら成功です。🎉
-
-![クエリパラメーターの token が表示された画面](docs/images/cloudfront-token-result.png)
-
----
-
-### 9️⃣ Lambda の実行ロールに DynamoDB 権限を付ける
-
-> **追加設定の進み具合:** 🟩 🟩 🟩 🟩 ⬜ ⬜
-
-#### 1. Lambda の画面を開く
-
-1. ブラウザーで AWS マネジメントコンソールのタブに戻ります。
-2. 画面右上が、DynamoDB テーブルを作った利用リージョンと同じであることを確認します。
-3. 画面上部の検索欄に `Lambda` と入力します。
-4. 検索結果の「Lambda」をクリックします。
-5. 左メニューの「関数」をクリックします。
-
-> [!IMPORTANT]
-> 🌏 Lambda と DynamoDB は、必ず同じリージョンに作成してください。この README のコードは、Lambda と同じリージョンにある DynamoDB テーブルを探します。
-
-#### 2. Lambda 関数を作成する、または開く
-
-この手順では、`training-access-recorder` という Lambda 関数を使います。
-
-1. 関数の一覧で `training-access-recorder` を探します。
-2. すでにある場合は、関数名をクリックし、[「2つのテーブルの ARN をコピーする」](#copy-dynamodb-table-arns)へ進みます。
-3. ない場合は、「関数の作成」をクリックします。
-4. 次の2項目だけを設定します。
-
-| 画面の項目 | 入力・選択するもの |
-| --- | --- |
-| 作成方法 | 一から作成 |
-| 関数名 | `training-access-recorder` |
-
-ランタイム、アーキテクチャ、アクセス許可、詳細設定など、上記以外の項目は変更せず、デフォルトのままにします。
-
-5. 画面下部の「関数の作成」をクリックします。
-6. 関数の詳細画面が表示され、作成成功のメッセージが出るまで待ちます。
-7. `Getting started` が表示された場合は、`Dismiss` をクリックして閉じます。
-
-> [!NOTE]
-> 💡 新しい実行ロールは、Lambda が CloudWatch Logs にログを書き込むための基本権限を持った状態で自動作成されます。このあと、そのロールへ DynamoDB の権限だけを追加します。
-
-<a id="copy-dynamodb-table-arns"></a>
-
-#### 3. 2つのテーブルの ARN をコピーする
-
-1. AWS 画面上部の検索欄に `DynamoDB` と入力し、検索結果の「DynamoDB」をクリックします。
-2. 画面右上が、事前に決めた利用リージョンであることを確認します。
-3. 左メニューの「テーブル」をクリックします。
-4. `training-users` をクリックします。
-5. 「設定」タブの「一般的な情報」にある「Amazon リソースネーム（ARN）」をコピーします。
-6. `training-users` の ARN だと分かる名前を付けて、一時的に安全なメモへ貼り付けます。
-7. 左メニューの「テーブル」で一覧に戻り、`training-accesses` をクリックします。
-8. 同じ場所から ARN をコピーし、`training-accesses` の ARN だと分かるように同じメモへ貼り付けます。
-
-![DynamoDB テーブルの ARN をコピーする場所](docs/images/dynamodb-copy-table-arn.png)
-
-> [!CAUTION]
-> 🔐 ARN には AWS アカウント ID が含まれます。README、チャット、公開リポジトリなどへ実際の値を貼り付けないでください。
-
-#### 4. Lambda の実行ロールを開く
-
-1. AWS 画面上部の検索欄に `Lambda` と入力し、検索結果の「Lambda」をクリックします。
-2. 画面右上が、事前に決めた利用リージョンであることを確認します。
-3. 左メニューの「関数」をクリックします。
-4. `training-access-recorder` をクリックします。
-5. 「設定」タブをクリックします。
-6. 左側の「アクセス権限」をクリックします。
-7. 「実行ロール」に表示されたロール名のリンクをクリックします。IAM のロール画面が、同じタブまたは新しいタブで開きます。
-8. IAM のロール画面で「許可」タブを開きます。
-9. 「許可を追加」→「インラインポリシーを作成」をクリックします。
-
-![IAM ロールでインラインポリシーを作成する画面](docs/images/iam-create-inline-policy.png)
-
-> [!IMPORTANT]
-> 🔒 実行ロールに最初から付いている基本実行ポリシーは削除しないでください。ここでは新しいインラインポリシーを追加します。
-
-#### 5. 読み取り・書き込み権限を JSON で設定する
-
-1. ポリシーエディタの「JSON」をクリックします。
-2. 既存の内容を、次の JSON に置き換えます。
-3. `<training-users の ARN>` と `<training-accesses の ARN>` を、先ほどコピーした実際の ARN に置き換えます。
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "dynamodb:GetItem"
-      ],
-      "Resource": "<training-users の ARN>"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "dynamodb:PutItem"
-      ],
-      "Resource": "<training-accesses の ARN>"
-    }
-  ]
-}
-```
-
-| 許可する操作 | 対象 | 用途 |
-| --- | --- | --- |
-| `dynamodb:GetItem` | `training-users` | `token` が登録済みか確認する |
-| `dynamodb:PutItem` | `training-accesses` | `token` とアクセス日時を記録する |
-
-![IAM の JSON ポリシーエディタ](docs/images/iam-dynamodb-policy-json.png)
-
-> [!IMPORTANT]
-> 🔒 `Resource` を `*` にせず、2つのテーブルの ARN を個別に指定してください。Lambda に必要な操作だけを許可します。
-
-> [!NOTE]
-> ✍️ 置き換え後の `Resource` は `"arn:aws:dynamodb:<利用リージョンコード>:..."` のような値になります。たとえば東京なら `"arn:aws:dynamodb:ap-northeast-1:..."` です。実際にコピーした ARN を使用し、`<` と `>`、テーブル名の説明文が JSON に残っていないことを確認してください。
-
-4. JSON のエラーが `0` であることを確認します。
-5. 「次へ」をクリックします。
-
-#### 6. ポリシーを作成する
-
-1. ポリシー名に `TrainingAccessRecorderDynamoDBPolicy` と入力します。
-2. 内容に `DynamoDB`、読み取り、書き込み、複数リソースが表示されていることを確認します。
-3. 「ポリシーの作成」をクリックします。
-4. 成功メッセージが表示され、ロールの許可一覧に `TrainingAccessRecorderDynamoDBPolicy` が追加されたことを確認します。
-
-![インラインポリシーの名前と作成ボタン](docs/images/iam-policy-name.png)
-
----
-
-### 🔟 Lambda にアクセス記録処理を設定する
-
-> **追加設定の進み具合:** 🟩 🟩 🟩 🟩 🟩 ⬜
-
-#### 1. `index.mjs` を書き換える
-
-1. Lambda の画面を開いていたブラウザータブに戻ります。タブを閉じた場合は、AWS 画面上部の検索欄から `Lambda` を開きます。
-2. 画面右上が、事前に決めた利用リージョンであることを確認します。
-3. 左メニューの「関数」をクリックします。
-4. `training-access-recorder` をクリックします。
-5. 「コード」タブをクリックします。
-6. 「コードソース」にある `index.mjs` をクリックします。
-7. エディタ内の既存コードをすべて選択し、次のコードに置き換えます。
+1. 「Build」タブを開きます。
+2. `Function code` の既存コードをすべて選択し、次のコードに置き換えます。
 
 ```javascript
-import {
-  DynamoDBClient,
-  GetItemCommand,
-  PutItemCommand
-} from "@aws-sdk/client-dynamodb";
+function handler(event) {
+  var request = event.request;
+  var token = request.querystring['x-token'];
 
-const client = new DynamoDBClient({});
-
-const USERS_TABLE = "training-users";
-const ACCESSES_TABLE = "training-accesses";
-
-export const handler = async (event) => {
-  try {
-    const body = event.body ? JSON.parse(event.body) : {};
-    const token = body.token;
-
-    if (!token) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({
-          message: "token is required"
-        })
-      };
-    }
-
-    // token が training-users に存在するか確認
-    const userResult = await client.send(
-      new GetItemCommand({
-        TableName: USERS_TABLE,
-        Key: {
-          token: { S: token }
-        }
-      })
+  if (token && token.value) {
+    console.log(
+      'training-access token=' + token.value +
+      ' uri=' + request.uri
     );
-
-    if (!userResult.Item) {
-      return {
-        statusCode: 404,
-        body: JSON.stringify({
-          message: "token not found"
-        })
-      };
-    }
-
-    // 現在時刻を取得
-    const accessedAt = new Date().toISOString();
-
-    // アクセス履歴を書き込み
-    await client.send(
-      new PutItemCommand({
-        TableName: ACCESSES_TABLE,
-        Item: {
-          token: { S: token },
-          accessedAt: { S: accessedAt }
-        }
-      })
-    );
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        message: "access recorded",
-        token,
-        accessedAt
-      })
-    };
-  } catch (error) {
-    console.error(error);
-
-    return {
-      statusCode: 500,
-      body: JSON.stringify({
-        message: "internal server error"
-      })
-    };
   }
-};
+
+  return request;
+}
 ```
 
-#### 2. コードを反映する
+このコードは `x-token` がある場合だけ、トークンとアクセス先のパスをログへ出力します。リクエストは変更せず CloudFront へ戻します。
 
-1. コードの右側に `Undeployed Changes` と表示されていることを確認します。
-2. 「Deploy」をクリックします。
-3. 「関数 `training-access-recorder` が正常に更新されました。」と表示されるまで待ちます。
-4. `Undeployed Changes` の表示が消えたことを確認します。
+3. 「Save changes」をクリックします。
+4. 保存成功のメッセージを確認します。
 
-![Lambda のコードと Deploy ボタン](docs/images/lambda-code-deploy.png)
+<img src="docs/images/cloudfront-function-code.png" alt="CloudFront Function のコードと Save changes" width="70%" />
 
-> [!NOTE]
-> 💡 このコードは、登録済みの `token` だけを受け付けます。`training-users` にない値では履歴を作成しません。
+#### 3. 関数を公開する
+
+1. 「Publish」タブをクリックします。
+2. 「Publish function」をクリックします。
+3. 公開成功のメッセージを確認します。
+
+<img src="docs/images/cloudfront-function-publish.png" alt="CloudFront Function の Publish function" width="70%" />
+
+> [!IMPORTANT]
+> ⚡ コードを保存しただけでは使えません。「Publish function」まで完了してから次へ進みます。
 
 ---
 
-### 1️⃣1️⃣ Lambda と DynamoDB の動作を確認する
+<a id="step-7"></a>
 
-> **追加設定の進み具合:** 🟩 🟩 🟩 🟩 🟩 🟩
+### 7️⃣ CloudFront Function をアクセス時に実行する
 
-#### 1. Lambda のテストイベントを実行する
+> **ログ設定の進み具合:** 🟩 🟩 ⬜ ⬜ ⬜
 
-1. Lambda の `training-access-recorder` を開いたまま、「テスト」タブをクリックします。別の画面に移動している場合は、Lambda の「関数」一覧から `training-access-recorder` を開き直します。
-2. 「テストイベント」で「新しいイベントを作成」を選びます。
-3. 呼び出しタイプは「同期」、イベント共有の設定は「プライベート」のままにします。
-4. イベント名は任意の名前を入力します。例: `MyEventName`
-5. テンプレートが表示されている場合は、そのままで構いません。
-6. 「イベント JSON」に表示されている内容をすべて削除し、次の内容を入力します。
+#### 1. ビヘイビアを編集する
 
-```json
-{
-  "body": "{\"token\":\"test-001\"}"
-}
+1. CloudFront の「ディストリビューション」を開きます。
+2. <a href="#step-3" target="_blank">手順3「CloudFront を作る」</a>で作成したディストリビューションをクリックします。
+3. 「ビヘイビア」タブをクリックします。
+4. パスパターンが「デフォルト `(*)`」の行を選びます。
+5. 「編集」をクリックします。
+
+<img src="docs/images/cloudfront-behavior-edit.png" alt="CloudFront のビヘイビアを選択して編集" width="70%" />
+
+#### 2. ビューワーリクエストへ関連付ける
+
+画面下部の「関数の関連付け - オプション」を、次のとおり設定します。
+
+| 画面の項目 | 入力・選択するもの |
+| --- | --- |
+| ビューワーリクエストの関数タイプ | CloudFront Functions |
+| ビューワーリクエストの関数 ARN / 名前 | `training-access-logger` |
+| ビューワーレスポンス | 関連付けなし |
+| オリジンリクエスト | 関連付けなし |
+| オリジンレスポンス | 関連付けなし |
+
+1. ビューワーリクエストの「関数タイプ」で「CloudFront Functions」を選びます。
+2. 「関数 ARN / 名前」の `Choose a function` で、作成した関数名 `training-access-logger` を選びます。
+3. 「Save changes」をクリックします。
+4. ディストリビューションへの反映が完了するまで待ちます。
+
+<img src="docs/images/cloudfront-function-association.png" alt="ビューワーリクエストに CloudFront Function を関連付ける画面" width="70%" />
+
+---
+
+<a id="step-8"></a>
+
+### 8️⃣ アクセスして CloudWatch Logs を確認する
+
+> **ログ設定の進み具合:** 🟩 🟩 🟩 ⬜ ⬜
+
+#### 1. `x-token` を付けてアクセスする
+
+次の URL を新しいブラウザータブで開きます。ドメイン名は自分の値へ置き換えます。
+
+```text
+https://<ディストリビューションドメイン名>/?x-token=test-001
 ```
 
-7. 「保存」または「変更を保存」をクリックします。
-8. 「テスト」をクリックします。
+「セキュリティ訓練ページ」が表示されることを確認します。
 
-![Lambda のテストイベントとテストボタン](docs/images/lambda-test-event.png)
+> [!IMPORTANT]
+> 🔒 `x-token` には氏名、メールアドレス、社員番号などを直接入れず、訓練専用のランダムな値を使います。URL はブラウザー履歴や各種ログへ残る可能性があります。
 
-#### 2. Lambda の応答を確認する
+#### 2. CloudWatch を `us-east-1` で開く
 
-1. 画面上部の「詳細」を開きます。
-2. 「実行中の関数: 成功」と表示されていることを確認します。
-3. `Response` の `statusCode` が `200` になっていることを確認します。
-4. `body` に `access recorded`、`test-001`、実行日時が表示されていることを確認します。
+1. AWS 画面上部の検索欄から CloudWatch を開きます。
+2. 画面右上のリージョン名をクリックします。
+3. 「米国東部（バージニア北部）」`us-east-1` を選びます。
 
-応答の例は次のとおりです。
+<img src="docs/images/cloudwatch-us-east-1-region.png" alt="CloudWatch のリージョンを米国東部（バージニア北部）に変更" width="70%" />
 
-```json
-{
-  "statusCode": 200,
-  "body": "{\"message\":\"access recorded\",\"token\":\"test-001\",\"accessedAt\":\"20XX-XX-XXTXX:XX:XX.XXXZ\"}"
-}
+> [!IMPORTANT]
+> 🌏 ここでは S3 を作成した利用リージョンではなく、必ず `us-east-1` を選びます。
+
+#### 3. ロググループを確認する
+
+1. CloudWatch の左メニューで「ログ」を開きます。
+2. 「ログ管理」をクリックします。
+
+<img src="docs/images/cloudwatch-log-management.png" alt="CloudWatch の「ログ管理」" width="70%" />
+
+3. 次のロググループを探します。
+
+```text
+/aws/cloudfront/function/training-access-logger
 ```
 
-![Lambda のテストが成功した画面](docs/images/lambda-test-success.png)
+4. 見つからない場合は数分待ち、更新ボタンをクリックします。
+5. ロググループ名のリンクをクリックします。
 
-#### 3. DynamoDB のレコードを確認する
+<img src="docs/images/cloudwatch-log-group.png" alt="CloudFront Function のロググループ" width="70%" />
 
-1. AWS 画面上部の検索欄に `DynamoDB` と入力し、検索結果の「DynamoDB」をクリックします。
-2. 画面右上が、事前に決めた利用リージョンであることを確認します。
-3. 左メニューの「項目を探索」をクリックします。
-4. 「テーブル」から `training-accesses` を選びます。
-5. 「スキャン」を選び、「実行する」をクリックします。
-6. 結果一覧の `token` に `test-001` が表示されることを確認します。
-7. `accessedAt` に Lambda を実行した日時が UTC の ISO 8601 形式で表示されることを確認します。
+#### 4. ログストリームを確認する
 
-![training-accesses に記録された token とアクセス日時](docs/images/dynamodb-access-record.png)
+1. 「ログストリーム」タブに1件以上のログストリームがあることを確認します。
+2. 最新のログストリームをクリックします。
+3. ログイベントに次のようなメッセージがあることを確認します。
+
+```text
+training-access token=test-001 uri=/
+```
 
 > [!NOTE]
-> 🕒 テストを複数回実行すると、同じ `token` でも `accessedAt` が異なる項目として記録されます。
+> ⏳ ログの反映には数分かかることがあります。アクセス回数とログレコード数が常に完全一致するとは限りません。
+
+---
+
+<a id="step-9"></a>
+
+### 9️⃣ トークンと氏名のルックアップテーブルを作る
+
+> **ログ設定の進み具合:** 🟩 🟩 🟩 🟩 ⬜
+
+#### 1. CSV ファイルを確認する
+
+このプロジェクトの [`training_users.csv`](./training_users.csv) を使います。ファイルの条件は次のとおりです。
+
+- 文字コードは UTF-8
+- 先頭にヘッダー行がある
+- ファイルサイズは最大 10 MB
+- ヘッダーは `token,name`
+
+確認用の内容は次のとおりです。
+
+```csv
+token,name
+test-001,テスト太郎
+test-002,テスト花子
+test-003,テスト二郎
+```
+
+> [!CAUTION]
+> 🔐 実際の氏名を含む CSV は個人情報として扱ってください。公開リポジトリへコミットせず、組織のルールに沿った端末・保管場所で管理します。README の画像には確認用の架空データだけを使用しています。
+
+#### 2. ルックアップテーブルの管理画面を開く
+
+1. CloudWatch が `us-east-1` になっていることを確認します。
+2. 左メニューの「セットアップ」→「設定」をクリックします。
+3. CloudWatch 設定の「ログ」タブをクリックします。
+
+<img src="docs/images/cloudwatch-lookup-table-settings.png" alt="CloudWatch 設定の「ログ」タブを開く" width="70%" />
+
+4. 「ルックアップテーブル」までスクロールし、「管理」をクリックします。
+5. 「ルックアップテーブルを作成」をクリックします。
+
+<img src="docs/images/cloudwatch-lookup-table-navigation.png" alt="ルックアップテーブルの管理画面から作成画面を開く" width="70%" />
+
+#### 3. CSV とテーブル名を設定する
+
+1. `CSV ファイル` の「ファイルを選択」をクリックします。
+2. `training_users.csv` を選びます。
+3. `KMS キー - オプション` は、組織から指定がなければ空欄にします。
+4. `テーブル名` に `training_users` と入力します。
+5. `テーブルの説明 - オプション` は空欄にします。
+6. 「ルックアップテーブルを作成」をクリックします。
+7. 一覧に `training_users` が表示され、現在のヘッダーが `token, name` になっていることを確認します。
+
+<img src="docs/images/cloudwatch-lookup-table-create.png" alt="CSV とルックアップテーブル名の設定" width="70%" />
+
+> [!IMPORTANT]
+> ✍️ CSV ファイル名は `training_users.csv`、ルックアップテーブル名は拡張子なしの `training_users` です。Logs Insights のクエリではテーブル名を使います。
+
+---
+
+<a id="step-10"></a>
+
+### 🔟 Logs Insights でアクセス結果を表示する
+
+> **ログ設定の進み具合:** 🟩 🟩 🟩 🟩 🟩
+
+#### 1. ログ分析を開いてロググループを選ぶ
+
+1. CloudWatch が `us-east-1` になっていることを確認します。
+2. 左メニューの「ログ」→「ログ分析」をクリックします。
+3. 検索欄をクリックし、次のロググループを選びます。
+
+```text
+/aws/cloudfront/function/training-access-logger
+```
+
+<img src="docs/images/cloudwatch-log-group-select.png" alt="Logs Insights でロググループを検索する画面" width="70%" />
+
+4. クエリスコープに選んだロググループが追加されたことを確認します。
+
+<img src="docs/images/cloudwatch-log-group-scope.png" alt="選択したロググループがクエリスコープに追加された画面" width="70%" />
+
+#### 2. 表示タイムゾーンと対象期間を決める
+
+1. 画面右上のタイムゾーンを「ローカルタイムゾーン」に変更します。
+2. アクセス確認を行った時刻を含む対象期間を選びます。最初は「最後の1時間」または「最後の3時間」が目安です。
+
+<img src="docs/images/cloudwatch-local-timezone.png" alt="Logs Insights のタイムゾーンをローカルタイムゾーンに変更" width="70%" />
+
+#### 3. クエリを入力して実行する
+
+ロググループを選ぶと、エディタの先頭に `SOURCE` で始まる行が自動作成されることがあります。その行は削除せず、次のクエリを後ろへ追加します。
+
+```text
+fields @timestamp, @message
+| filter @message like /training-access token=/
+| parse @message logfmt as lf
+| fields
+    @timestamp,
+    formatDate(@timestamp, "%Y/%m/%d %H:%M:%S", "Asia/Tokyo") as accessTime,
+    trim(lf.token) as trainingToken
+| filter trainingToken != "missing"
+| lookup training_users token as trainingToken OUTPUT name
+| display accessTime, trainingToken, name
+| sort @timestamp desc
+| limit 10000
+```
+
+<img src="docs/images/cloudwatch-query-not-delete-source.png" alt="SOURCEは維持したままクエリを貼り付け" width="70%" />
+
+1. エディタにクエリを入力します。
+2. `SOURCE` 行がある場合は先頭に残っていることを確認します。
+3. 「実行」をクリックします。
+4. 結果に `accessTime`、`trainingToken`、`name` が表示されることを確認します。
+5. `test-001`〜`test-003` の行の`name`に 対応する名前が表示されたら成功です。🎉
+
+<img src="docs/images/cloudwatch-query-results.png" alt="Logs Insights のクエリ結果" width="70%" />
+
+> [!NOTE]
+> 🕒 上のクエリは `accessTime` を日本時間で表示するため、`Asia/Tokyo` を指定しています。別のタイムゾーンで表示する場合は、利用者の IANA タイムゾーン名へ置き換えてください。
+
+> [!WARNING]
+> 📊 アクセス直後に結果が表示されない場合は数分待って再実行し、対象期間も確認します。CloudFront Functions のログはベストエフォートのため、まれに配信されないことがあります。
+
+> [!WARNING]
+> 💰 CloudWatch Logs、Logs Insights、ルックアップテーブルは、保存量やクエリのスキャン量などに応じて料金が発生する場合があります。対象期間を必要以上に広げず、AWS 画面の料金案内を確認してください。
+
+---
+
+<a id="step-11"></a>
+
+### 1️⃣1️⃣ 任意: クエリをダッシュボードへ保存する
+
+毎回クエリを入力せずに確認したい場合だけ行います。
+
+1. Logs Insights でクエリを実行します。
+2. 「実行」の右にあるメニューを開きます。
+3. 「ダッシュボードに追加」をクリックします。
+
+    <img src="docs/images/cloudwatch-log-create-dashboard.png" alt="CloudWatch ダッシュボードの保存ボタン押下" width="70%" />
+
+4. 任意のダッシュボード名を入力して追加します。
+5. ダッシュボード画面上部の「ダッシュボードの保存」をクリックします。
+
+    <img src="docs/images/cloudwatch-dashboard-save.png" alt="CloudWatch ダッシュボードの保存" width="70%" />
+
+6. CloudWatch の左メニューにある「ダッシュボード」から開けることを確認します。
+
+    <img src="docs/images/cloudwatch-dashboard-sidebar.png" alt="CloudWatch サイドバーからのダッシュボードのアクセス" width="30%" />
+
+> [!NOTE]
+> 📅 ダッシュボードを開いたときも、画面右上の対象期間を必要に応じて変更してください。
+<img src="docs/images/cloudwatch-dashboard-between.png" alt="CloudWatch サイドバーからのダッシュボードのアクセス" width="70%" />
+
 
 ---
 
 ### 🔄 補足: 公開後に `index.html` を変更した場合
 
-この操作は、手順2でアップロードした後に `index.html` を変更した場合だけ行います。変更していなければ必要ありません。
-
 #### 1. S3 に上書きアップロードする
 
-1. AWS 画面上部の検索欄に `S3` と入力し、検索結果の「S3」をクリックします。
-2. 左メニューの「バケット」→「汎用バケット」の順にクリックします。
-3. Web ページを保存しているバケット名をクリックします。
-4. 「オブジェクト」タブの「アップロード」をクリックします。
-5. 「ファイルを追加」から、更新した `index.html` を選びます。
-6. 同名ファイルを上書きする内容になっていることを確認します。
-7. 右下の「アップロード」をクリックします。
-8. 緑色の成功メッセージが表示されたら完了です。
+1. S3 で Web ページを保存しているバケットを開きます。
+2. 「オブジェクト」タブの「アップロード」をクリックします。
+3. 「ファイルを追加」から更新した `index.html` を選びます。
+4. 同名ファイルを上書きすることを確認し、「アップロード」をクリックします。
 
-![S3 の「アップロード」ボタンと index.html](docs/images/s3-overwrite-index.png)
+<img src="docs/images/s3-overwrite-index.png" alt="S3 の「アップロード」ボタンと index.html" width="70%" />
 
-#### 2. CloudFront のキャッシュ削除を開く
+#### 2. CloudFront のキャッシュを削除する
 
-1. AWS 画面上部の検索欄に `CloudFront` と入力し、検索結果の「CloudFront」をクリックします。
-2. 左メニューの「ディストリビューション」をクリックします。
-3. [手順3「CloudFront を作る」の「基本設定を入力する」](#cloudfront-distribution-name)で `Distribution name` に入力した名前を探し、クリックします。
-4. 「キャッシュ削除」タブをクリックします。
-5. 「キャッシュ削除を作成」をクリックします。
+1. CloudFront で作成したディストリビューションを開きます。
+2. 「キャッシュ削除」タブで「キャッシュ削除を作成」をクリックします。
 
-![CloudFront の「キャッシュ削除を作成」ボタン](docs/images/cloudfront-create-invalidation.png)
+<img src="docs/images/cloudfront-create-invalidation.png" alt="CloudFront の「キャッシュ削除を作成」ボタン" width="70%" />
 
-#### 3. すべてのファイルを無効にする
+3. `Selection method` は `By paths` のままにします。
+4. `Object paths to invalidate` に `/*` と入力します。
+5. 「キャッシュ削除を作成」をクリックし、完了まで待ちます。
 
-1. `Selection method` は `By paths` のままにします。
-2. `Object paths to invalidate` に `/*` と入力します。
-3. 「キャッシュ削除を作成」をクリックします。
-4. キャッシュ削除のステータスが完了になるまで待ちます。
-
-![Object paths to invalidate に /* を入力した画面](docs/images/cloudfront-invalidation-path.png)
-
-> [!NOTE]
-> 💡 `/*` は、CloudFront に残っているすべてのパスのキャッシュを無効にする指定です。
+<img src="docs/images/cloudfront-invalidation-path.png" alt="Object paths to invalidate に /* を入力した画面" width="70%" />
 
 ---
 
@@ -855,27 +696,22 @@ export const handler = async (event) => {
 
 ## ✅ 最後の確認
 
-- [ ] S3、DynamoDB、Lambda を事前に決めた同じ利用リージョンに作成した
 - [ ] S3 の「パブリックアクセスをすべてブロック」が ON
 - [ ] S3 バケットの中に `index.html` がある
 - [ ] CloudFront の `S3 origin` に正しいバケットが表示されている
 - [ ] `Allow private S3 bucket access to CloudFront` が ON
 - [ ] `Default root object` が `index.html`
-- [ ] CloudFront の URL で Web ページを開ける
-- [ ] URL が `https://` で始まっている
-- [ ] DynamoDB に `training-users` テーブルがあり、状態が「アクティブ」
-- [ ] `training-users` のパーティションキーが `token`（文字列）
-- [ ] `training-users` に `token: test-001` と `name: テスト太郎` の確認用項目がある
-- [ ] DynamoDB に `training-accesses` テーブルがあり、状態が「アクティブ」
-- [ ] `training-accesses` のキーが `token`（文字列）と `accessedAt`（文字列）
-- [ ] `?token=test-001` を付けると `token = test-001` と表示される
-- [ ] Lambda に `training-access-recorder` 関数がある
-- [ ] 実行ロールに `TrainingAccessRecorderDynamoDBPolicy` がある
-- [ ] `training-users` には `GetItem`、`training-accesses` には `PutItem` だけを許可している
-- [ ] Lambda のコードを Deploy 済み
-- [ ] `test-001` のテスト結果が `statusCode: 200`
-- [ ] `training-accesses` に `test-001` と `accessedAt` が記録されている
-- [ ] Web ページから Lambda を自動実行する接続は、この手順の対象外だと理解している
+- [ ] CloudFront の HTTPS URL で Web ページを開ける
+- [ ] CloudFront Function `training-access-logger` が公開済み
+- [ ] デフォルトビヘイビアのビューワーリクエストに関数を関連付けた
+- [ ] `?x-token=test-001` を付けてアクセスした
+- [ ] CloudWatch を `us-east-1` で開いている
+- [ ] `/aws/cloudfront/function/training-access-logger` ロググループがある
+- [ ] ログに `training-access token=test-001` がある
+- [ ] `training_users` ルックアップテーブルがある
+- [ ] ルックアップテーブルのヘッダーが `token, name`
+- [ ] Logs Insights の結果に `accessTime`、`trainingToken`、`name` が表示される
+- [ ] ログがベストエフォートであり、完全なアクセス証跡ではないと理解している
 
 ---
 
@@ -883,26 +719,23 @@ export const handler = async (event) => {
 
 ## 🆘 うまくいかないとき
 
-| 画面に出るもの | 確認すること |
+| 画面に出るもの・困っていること | 確認すること |
 | --- | --- |
-| `403` エラー | `Default root object` が `index.html` か確認。`S3 origin` と S3 のプライベートアクセスも確認 |
-| `404` エラー | S3 バケットの中に `index.html` があるか確認 |
-| 古いページが表示される | 数分待ってからブラウザーを再読み込み |
-| S3 の URL を開けない | 正常な動き。CloudFront の URL を開く |
-| DynamoDB のテーブルを作成できない | テーブル名とキー名を確認。DynamoDB を作成できる権限があるか管理者に確認 |
-| DynamoDB の状態が「作成中」のまま | 少し待ってから、更新ボタンで画面を再読み込み |
-| 作った DynamoDB テーブルや Lambda 関数が一覧にない | 画面右上が、作成時に選んだ利用リージョンか確認 |
-| `token が指定されていません` と表示される | URL の末尾が `/?token=test-001` になっているか確認 |
-| Lambda の「関数の作成」が押せない | Lambda 関数や実行ロールを作成できる権限があるか管理者に確認 |
-| 実行ロールを開けない、またはポリシーを作成できない | IAM ロールとインラインポリシーを設定できる権限があるか管理者に確認 |
-| IAM の JSON にエラーが表示される | JSON 全体を貼り直し、2つの ARN が二重引用符の内側にあるか、`<` と `>` が残っていないか確認 |
-| `AccessDeniedException` | 実行ロールのインラインポリシー、操作名、2つのテーブル ARN を確認 |
-| `ResourceNotFoundException` | Lambda と DynamoDB のリージョン、およびテーブル名を確認 |
-| Lambda の応答が `400` | テスト JSON の `body` 内に `token` が入っているか確認 |
-| Lambda の応答が `404` | `training-users` に `token: test-001` の項目があるか確認 |
-| Lambda の応答が `500` | コードを Deploy 済みか確認し、テスト結果または CloudWatch Logs のエラーを確認 |
-| テストは成功したが履歴が見つからない | `training-accesses` を選び直し、「スキャン」→「実行する」で再読み込み |
-| 公開後に更新した `index.html` が表示されない | 補足手順の S3 上書きアップロードと CloudFront の `/*` のキャッシュ削除を確認 |
+| CloudFront で `403` | `Default root object`、S3 origin、S3 のプライベートアクセス設定を確認 |
+| CloudFront で `404` | S3 バケット内に `index.html` があるか確認 |
+| S3 の URL を開けない | 正常な動き。S3 ではなく CloudFront の URL を開く |
+| 古いページが表示される | S3 への上書きと CloudFront の `/*` キャッシュ削除を確認 |
+| 関数をビヘイビアで選べない | 関数名、`Publish function` の完了、CloudFront の反映状況を確認 |
+| 関数の関連付け後にページを開けない | コードを貼り直し、`return request;` があるか確認して再公開 |
+| ロググループが見つからない | CloudWatch が `us-east-1` か、関数の関連付け後に `x-token` 付き URL へアクセスしたか確認 |
+| ログストリームがない | 数分待って更新。関数の関連付けと公開状態も確認 |
+| ログに `training-access` がない | URL が `?x-token=test-001` か確認。`token` ではなく `x-token` を使う |
+| ルックアップテーブルを作成できない | CSV が UTF-8、ヘッダーあり、10 MB 以下か確認 |
+| クエリで `training_users` が見つからない | テーブルと Logs Insights が同じ `us-east-1` か、テーブル名に `.csv` を付けていないか確認 |
+| クエリに構文エラーが出る | 自動作成された `SOURCE` 行を残し、その後ろへクエリ全文を貼り直す |
+| `name` が空欄 | CSV の `token` とログの `x-token` が完全に一致しているか確認 |
+| 結果が0件 | 対象期間を広げ、数分待って再実行。ロググループとリージョンも確認 |
+| 時刻が期待と違う | `formatDate` の `Asia/Tokyo` を目的の IANA タイムゾーン名に変更 |
 
 ---
 
@@ -910,10 +743,11 @@ export const handler = async (event) => {
 
 - 訓練の許可を得た人だけが使用してください。
 - パスワード、氏名、メールアドレスを入力させる画面は作らないでください。
-- URL の `token` には、個人情報や認証情報を直接入れないでください。
-- DynamoDB に実データを登録する場合は、保存目的、閲覧権限、保存期間を組織内で決めてください。
-- DynamoDB の ARN や AWS アカウント ID を、公開リポジトリや外部のチャットへ貼らないでください。
-- Lambda の実行ロールには必要なテーブルと操作だけを許可し、`Resource: "*"` は使わないでください。
-- この手順では Lambda の関数 URL を有効にしません。外部公開する場合は、認証、入力検証、レート制限を別途設計してください。
+- URL の `x-token` には、個人情報や認証情報を直接入れないでください。
+- トークンは推測しにくい訓練専用のランダムな値にし、訓練ごとに使い回さないでください。
+- 実際の氏名を含む `training_users.csv` は公開リポジトリ、README、外部チャットへ貼らないでください。
+- CloudWatch Logs とルックアップテーブルの閲覧権限、保存期間、削除日を組織内で決めてください。
+- CloudFront Function には必要な `x-token` と URI だけをログ出力し、Cookie、認証ヘッダー、個人情報を出力しないでください。
 - S3 のパブリックアクセスは、すべてブロックしてください。
-- 訓練が終わったら、不要になった CloudFront、S3、DynamoDB のテーブル、Lambda 関数、IAM ポリシーを削除してください。
+- CloudWatch Logs は完全なアクセス証跡ではありません。厳密な監査が必要な場合は、組織のセキュリティ担当者と別の記録方法を設計してください。
+- 訓練が終わったら、不要になった CloudFront、CloudFront Function、S3、CloudWatch のロググループ、ルックアップテーブル、ダッシュボードを削除してください。
