@@ -29,42 +29,7 @@
 
 ## 🗺️ 作るしくみ
 
-```mermaid
-flowchart LR
-    A["👤 訓練を受ける人<br/>ブラウザー"]
-    B["🌐 CloudFront<br/>Web サイトの入り口"]
-    C["🔒 S3<br/>非公開のファイル置き場"]
-    D["📄 index.html"]
-    E["⚡ CloudFront Function<br/>training-access-logger"]
-    F["📊 CloudWatch Logs<br/>米国東部 us-east-1"]
-    G["📄 training_users.csv"]
-    H["🔎 ルックアップテーブル<br/>training_users"]
-    I["🔍 Logs Insights<br/>アクセス結果"]
-
-    A -->|x-token を付けてアクセス| B
-    B -->|ビューワーリクエスト| E
-    E -->|リクエストを戻す| B
-    B -->|ファイルを読み込む| C
-    C --> D
-    E -.->|ログをベストエフォートで配信| F
-    G --> H
-    F --> I
-    H --> I
-
-    classDef person fill:#e8f4ff,stroke:#1f6feb,color:#0d1117,stroke-width:2px;
-    classDef cloud fill:#fff3cd,stroke:#f59e0b,color:#0d1117,stroke-width:2px;
-    classDef storage fill:#e6ffed,stroke:#2da44e,color:#0d1117,stroke-width:2px;
-    classDef file fill:#f3e8ff,stroke:#8250df,color:#0d1117,stroke-width:2px;
-    classDef compute fill:#ffe8cc,stroke:#d97706,color:#0d1117,stroke-width:2px;
-    classDef logs fill:#e8f0ff,stroke:#2563eb,color:#0d1117,stroke-width:2px;
-
-    class A person;
-    class B cloud;
-    class C storage;
-    class D,G file;
-    class E compute;
-    class F,H,I logs;
-```
+![標的型訓練サイトのしくみ。アクセスから記録・分析までの流れ](./docs/images/architecture-overview.png)
 
 - `S3` に Web ページのファイルを保存します。
 - `CloudFront` を Web サイトの入り口にし、S3 は直接公開しません。
