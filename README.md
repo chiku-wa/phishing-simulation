@@ -610,7 +610,6 @@ fields @timestamp, @message
     @timestamp,
     formatDate(@timestamp, "%Y/%m/%d %H:%M:%S", "Asia/Tokyo") as accessTime,
     trim(lf.token) as trainingToken
-| filter trainingToken != "missing"
 | lookup training_users token as trainingToken OUTPUT name
 | display accessTime, trainingToken, name
 | sort @timestamp desc
